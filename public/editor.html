@@ -1,93 +1,505 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <title>PDF Editor</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <style>
-    :root { --accent:#e53935; --bg:#fff; }
-    body{margin:0;background:#fafafa;color:#111;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
-    header{position:sticky;top:0;background:var(--bg);border-bottom:1px solid #eee;z-index:10;
-           display:flex;gap:.5rem;align-items:center;padding:10px 14px}
-    .btn{border:1px solid #e3e3e3;background:#fff;border-radius:10px;padding:8px 12px;cursor:pointer;font-weight:600}
-    .btn.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
-    #stage{display:flex;justify-content:center;padding:16px}
-    canvas{background:#fff;border:1px solid #eee;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.06);max-width:100%}
-  </style>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PDF Editor</title>
+
+<!-- libs (via cdnjs for reliability) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js" defer></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js" defer></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js" defer></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/signature_pad/4.1.6/signature_pad.umd.min.js" defer></script>
+
+<style>
+  :root{
+    --red:#e53935; --red-d:#c62828; --ink:#111; --muted:#6b7280; --bg:#fafafa;
+    --card:#ffffff; --line:#e5e7eb;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial}
+  header{
+    position:sticky;top:0;z-index:10;background:var(--card);border-bottom:1px solid var(--line);
+  }
+  .bar{max-width:1200px;margin:0 auto;padding:10px 14px;display:flex;gap:12px;align-items:center}
+  .brand{font-weight:800;font-size:18px;margin-right:auto}
+  .btn{border:0;background:#f3f4f6;color:var(--ink);padding:10px 14px;border-radius:10px;cursor:pointer;font-weight:600}
+  .btn.red{background:var(--red);color:#fff}
+  .btn.red:hover{background:var(--red-d)}
+  .btn.ghost{background:transparent;border:1px solid var(--line)}
+  .sep{width:1px;height:28px;background:var(--line);margin:0 6px}
+  .field{display:flex;align-items:center;gap:6px}
+  .field label{color:var(--muted);font-size:12px}
+  .field input[type=number]{width:64px;padding:6px 8px;border:1px solid var(--line);border-radius:8px}
+
+  main{max-width:1200px;margin:14px auto;padding:0 14px;display:grid;grid-template-columns:220px 1fr;gap:16px}
+  aside{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:10px;height:calc(100vh - 120px);overflow:auto}
+  .thumb{border:1px solid var(--line);border-radius:10px;margin-bottom:10px;overflow:hidden;cursor:pointer;background:#fff}
+  .thumb.active{outline:2px solid var(--red)}
+  .thumb canvas{display:block;width:100%}
+
+  .stageWrap{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:10px;min-height:70vh;position:relative}
+  .stage{display:flex;justify-content:center}
+  .page{position:relative;margin:10px auto;box-shadow:0 8px 24px rgba(0,0,0,.06);border-radius:8px;overflow:hidden;background:#fff}
+  .layer{position:absolute;left:0;top:0;right:0;bottom:0}
+  .dropper{
+    position:absolute;inset:0;border:2px dashed var(--line);border-radius:12px;display:flex;align-items:center;justify-content:center;
+    color:var(--muted);font-weight:600;background:linear-gradient(#fff,#fff) padding-box, repeating-linear-gradient(45deg,#0000 0 10px,#f0f0f0 10px 20px) border-box;
+    pointer-events:none;opacity:0;transition:.15s;
+  }
+  .page.drag .dropper{opacity:1}
+
+  .toolchip{position:absolute;top:10px;left:10px;background:rgba(255,255,255,.9);border:1px solid var(--line);border-radius:10px;padding:4px;display:flex;gap:4px;z-index:5}
+  .tbtn{border:0;background:#f3f4f6;width:36px;height:36px;border-radius:8px;cursor:pointer}
+  .tbtn.active{outline:2px solid var(--red)}
+  .controls{display:flex;gap:10px;align-items:center}
+
+  .textBox{
+    position:absolute;min-width:40px;min-height:20px;padding:2px 4px;border:1px dashed var(--line);
+    border-radius:4px;background:#ffffffa0;cursor:move;white-space:pre-wrap
+  }
+  .handle{position:absolute;right:-8px;bottom:-8px;width:14px;height:14px;background:#fff;border:1px solid var(--line);border-radius:50%;cursor:nwse-resize}
+  .drawCanvas{position:absolute;left:0;top:0}
+
+  .toast{position:fixed;right:12px;bottom:12px;background:#111;color:#fff;padding:10px 12px;border-radius:10px;opacity:.95}
+</style>
 </head>
 <body>
-  <header>
-    <button id="zoomOut" class="btn">−</button>
-    <button id="zoomIn"  class="btn">+</button>
-    <button id="download" class="btn primary">Download</button>
-    <span id="status" style="margin-left:auto;opacity:.7">Waiting for file…</span>
-  </header>
+<header>
+  <div class="bar">
+    <div class="brand">PDF Editor</div>
 
-  <div id="stage"><canvas id="page"></canvas></div>
+    <button id="uploadBtn" class="btn red">Upload PDF</button>
+    <input type="file" id="fileInput" accept="application/pdf" hidden />
 
-  <!-- pdf.js from CDN -->
-  <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
-  <script>
-  pdfjsLib.GlobalWorkerOptions.workerSrc =
-    "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js";
+    <div class="sep"></div>
 
-  const canvas = document.getElementById('page');
-  const ctx = canvas.getContext('2d');
-  const statusEl = document.getElementById('status');
-  let pdfDoc = null, pageNum = 1, scale = 1.2, rawBytes = null;
+    <div class="controls">
+      <button class="tbtn active" data-tool="select" title="Select">↖️</button>
+      <button class="tbtn" data-tool="text"   title="Text">T</button>
+      <button class="tbtn" data-tool="pen"    title="Pen">✏️</button>
+      <button class="tbtn" data-tool="rect"   title="Rectangle">▭</button>
+      <button class="tbtn" data-tool="sign"   title="Signature">🖊️</button>
+      <button class="tbtn" data-tool="erase"  title="Delete">🗑️</button>
+      <div class="sep"></div>
+      <button id="zoomOut" class="tbtn" title="Zoom Out">−</button>
+      <button id="zoomIn"  class="tbtn" title="Zoom In">＋</button>
+      <div class="sep"></div>
+      <button id="rotatePage" class="tbtn" title="Rotate Page 90°">⟳</button>
+    </div>
 
-  async function renderPage(num){
-    const page = await pdfDoc.getPage(num);
-    const viewport = page.getViewport({ scale });
-    canvas.width = viewport.width; canvas.height = viewport.height;
-    await page.render({ canvasContext: ctx, viewport }).promise;
-    parent.postMessage({ type: 'yourpdflive:resize', h: document.body.scrollHeight }, '*');
+    <div class="sep"></div>
+
+    <div class="field">
+      <label>Font</label>
+      <input type="number" id="fontSize" min="8" max="72" value="14" />
+      <button id="boldBtn" class="btn ghost">Bold</button>
+    </div>
+
+    <div class="sep"></div>
+
+    <button id="downloadBtn" class="btn red">Download</button>
+  </div>
+</header>
+
+<main>
+  <aside id="thumbs"></aside>
+
+  <div class="stageWrap">
+    <div class="stage" id="stage"></div>
+  </div>
+</main>
+
+<div id="toast" class="toast" style="display:none"></div>
+
+<script>
+/* -------------------- helpers -------------------- */
+const $ = sel => document.querySelector(sel);
+const thumbs = $("#thumbs");
+const stage  = $("#stage");
+const toast  = $("#toast");
+
+function notify(msg, t=1500){
+  toast.textContent = msg;
+  toast.style.display = "block";
+  clearTimeout(notify._t);
+  notify._t = setTimeout(()=>toast.style.display="none", t);
+}
+
+const Tool = {SELECT:"select", TEXT:"text", PEN:"pen", RECT:"rect", SIGN:"sign", ERASE:"erase"};
+
+/* -------------------- state -------------------- */
+let tool = Tool.SELECT;
+let pdfDoc = null;
+let pdfBytes = null;
+let scale = 1.1;
+let pages = []; // per page {wrap, canvas, layer, drawCanvas, ctx, rotation}
+let activePageIdx = 0;
+let fontSize = 14;
+let isBold = false;
+
+const tbtns = [...document.querySelectorAll(".tbtn[data-tool]")];
+tbtns.forEach(b=>b.addEventListener("click", ()=>{
+  tbtns.forEach(x=>x.classList.toggle("active", x===b));
+  tool = b.dataset.tool;
+}));
+
+$("#boldBtn").onclick = () => {
+  isBold = !isBold;
+  $("#boldBtn").style.background = isBold ? "#e5e7eb" : "transparent";
+};
+$("#fontSize").oninput = e => fontSize = +e.target.value;
+
+/* -------------------- file pick / drag -------------------- */
+const fileInput = $("#fileInput");
+$("#uploadBtn").onclick = ()=> fileInput.click();
+window.addEventListener("message", (e)=>{
+  if(e.data === "open-file-picker"){ fileInput.click(); }
+});
+fileInput.addEventListener("change", async(e)=>{
+  const f = e.target.files[0];
+  if(!f) return;
+  await openPdfFile(await f.arrayBuffer());
+});
+
+async function openPdfFile(arrayBuf){
+  pdfBytes = arrayBuf;
+  pdfDoc   = await pdfjsLib.getDocument({data: arrayBuf}).promise;
+  renderAllPages();
+}
+
+/* -------------------- render pages -------------------- */
+async function renderAllPages(){
+  thumbs.innerHTML = "";
+  stage.innerHTML = "";
+  pages = [];
+
+  for(let i=1;i<=pdfDoc.numPages;i++){
+    const page = await pdfDoc.getPage(i);
+    const viewport = page.getViewport({scale});
+
+    // thumbnail
+    const tWrap = document.createElement("div");
+    tWrap.className = "thumb";
+    const tCanvas = document.createElement("canvas");
+    tWrap.appendChild(tCanvas);
+    thumbs.appendChild(tWrap);
+
+    const tCtx = tCanvas.getContext("2d");
+    const tViewport = page.getViewport({scale:0.25});
+    tCanvas.width = tViewport.width;
+    tCanvas.height = tViewport.height;
+    await page.render({canvasContext: tCtx, viewport: tViewport}).promise;
+
+    // full page
+    const wrap = document.createElement("div");
+    wrap.className = "page";
+    wrap.style.width = viewport.width + "px";
+    wrap.style.height= viewport.height + "px";
+
+    // base render canvas
+    const canvas = document.createElement("canvas");
+    canvas.width  = viewport.width;
+    canvas.height = viewport.height;
+
+    // overlay layer for text/rect elements
+    const layer = document.createElement("div");
+    layer.className = "layer";
+
+    // freehand/sign overlay canvas
+    const drawCanvas = document.createElement("canvas");
+    drawCanvas.className = "drawCanvas";
+    drawCanvas.width  = viewport.width;
+    drawCanvas.height = viewport.height;
+
+    // drop hint
+    const dropper = document.createElement("div");
+    dropper.className = "dropper";
+    dropper.textContent = "Drop your PDF here";
+
+    // tool bubble (per page rotate/delete optional)
+    const toolchip = document.createElement("div");
+    toolchip.className = "toolchip";
+    const delBtn = document.createElement("button");
+    delBtn.className = "tbtn"; delBtn.title="Delete selected"; delBtn.textContent="🗑️";
+    delBtn.onclick = ()=> deleteSelection(layer);
+    toolchip.appendChild(delBtn);
+
+    wrap.append(canvas, layer, drawCanvas, dropper, toolchip);
+    stage.appendChild(wrap);
+
+    // initial render
+    const ctx = canvas.getContext("2d");
+    await page.render({canvasContext: ctx, viewport}).promise;
+
+    // events
+    tWrap.onclick = ()=>{
+      document.querySelectorAll(".thumb").forEach(x=>x.classList.remove("active"));
+      tWrap.classList.add("active");
+      activePageIdx = i-1;
+      wrap.scrollIntoView({behavior:"smooth", block:"center"});
+    };
+    if(i===1) tWrap.classList.add("active");
+
+    // drag/drop a PDF to replace
+    ;["dragenter","dragover"].forEach(ev=>{
+      wrap.addEventListener(ev, e=>{ e.preventDefault(); wrap.classList.add("drag"); });
+    });
+    ;["dragleave","drop"].forEach(ev=>{
+      wrap.addEventListener(ev, e=>{ e.preventDefault(); wrap.classList.remove("drag"); });
+    });
+    wrap.addEventListener("drop", async(e)=>{
+      const file = e.dataTransfer.files?.[0];
+      if(file && file.type === "application/pdf"){
+        await openPdfFile(await file.arrayBuffer());
+      }
+    });
+
+    setupLayerInteractions(layer, drawCanvas);
+
+    pages.push({wrap, canvas, layer, drawCanvas, ctx, rotation:0, pageNum:i});
   }
 
-  async function openArrayBuffer(u8){
-    statusEl.textContent = "Loading…";
-    rawBytes = u8;
-    pdfDoc = await pdfjsLib.getDocument({ data: u8 }).promise;
-    pageNum = 1; scale = 1.2;
-    await renderPage(pageNum);
-    statusEl.textContent = "Ready";
-  }
+  notify("PDF loaded. Choose a tool to start editing.");
+}
 
-  // Receive file from WP iframe
-  window.addEventListener('message', async (ev) => {
-    const msg = ev.data || {};
-    if (msg.type === 'yourpdflive:openfile' && msg.data) {
-      const u8 = new Uint8Array(msg.data);
-      await openArrayBuffer(u8);
+/* -------------------- interactions -------------------- */
+let dragState = null; // for moving/resizing text elements
+let penState  = null; // for drawing
+let signPad   = null;
+
+function setupLayerInteractions(layer, drawCanvas){
+  layer.addEventListener("mousedown", e=>{
+    const page = layer.parentElement;
+    const idx  = [...stage.children].indexOf(page);
+    activePageIdx = idx;
+
+    if(tool===Tool.TEXT){
+      const el = makeTextBox(e.offsetX, e.offsetY);
+      layer.appendChild(el);
+      dragState = {el, dx:0, dy:0, moving:true};
+      focusText(el);
+      return;
+    }
+    if(tool===Tool.RECT){
+      const rect = document.createElement("div");
+      rect.className = "textBox";
+      rect.style.background = "#00000012";
+      rect.style.border = "1px solid #00000055";
+      rect.style.left = e.offsetX + "px";
+      rect.style.top  = e.offsetY + "px";
+      rect.style.width = "120px";
+      rect.style.height= "80px";
+      rect.dataset.kind = "rect";
+      const handle = document.createElement("div");
+      handle.className = "handle";
+      rect.appendChild(handle);
+      layer.appendChild(rect);
+      dragState = {el:rect, startX:e.offsetX, startY:e.offsetY, resizing:true};
+      return;
+    }
+    if(tool===Tool.SELECT){
+      const target = e.target.closest(".textBox");
+      if(target){
+        const r = target.getBoundingClientRect();
+        const pr = layer.getBoundingClientRect();
+        dragState = {
+          el:target,
+          dx:e.clientX - r.left,
+          dy:e.clientY - r.top,
+          moving:true
+        };
+        target.classList.add("active");
+      }
+      return;
+    }
+    if(tool===Tool.ERASE){
+      const target = e.target.closest(".textBox");
+      if(target) target.remove();
+      return;
     }
   });
 
-  // Fallback when user clicks “Open Full Screen”
-  (function tryHandoff(){
-    try{
-      const raw = localStorage.getItem('ypd:handoff');
-      if(!raw) return;
-      localStorage.removeItem('ypd:handoff');
-      const o = JSON.parse(raw);
-      const bin = atob(o.data);
-      const u8 = new Uint8Array(bin.length);
-      for(let i=0;i<bin.length;i++) u8[i] = bin.charCodeAt(i);
-      openArrayBuffer(u8);
-    }catch(e){}
-  })();
+  window.addEventListener("mousemove", e=>{
+    if(!dragState) return;
+    const layerRect = layer.getBoundingClientRect();
+    if(dragState.resizing){
+      const x = Math.max(10, Math.min(e.clientX - layerRect.left, layerRect.width - 10));
+      const y = Math.max(10, Math.min(e.clientY - layerRect.top,  layerRect.height - 10));
+      const w = x - parseFloat(dragState.el.style.left);
+      const h = y - parseFloat(dragState.el.style.top);
+      dragState.el.style.width  = Math.max(20, w) + "px";
+      dragState.el.style.height = Math.max(20, h) + "px";
+    } else if(dragState.moving){
+      dragState.el.style.left = (e.clientX - layerRect.left - dragState.dx) + "px";
+      dragState.el.style.top  = (e.clientY - layerRect.top  - dragState.dy) + "px";
+    }
+  });
 
-  // Toolbar
-  document.getElementById('zoomIn').onclick = () => { scale = Math.min(scale + 0.2, 4); renderPage(pageNum); };
-  document.getElementById('zoomOut').onclick = () => { scale = Math.max(scale - 0.2, 0.4); renderPage(pageNum); };
-  document.getElementById('download').onclick = () => {
-    if(!rawBytes) return;
-    const blob = new Blob([rawBytes], { type: 'application/pdf' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = 'edited.pdf';
-    a.click();
-    URL.revokeObjectURL(a.href);
-  };
-  </script>
+  window.addEventListener("mouseup", ()=>{ dragState=null; });
+
+  // pen + signature (draw onto overlay canvas)
+  drawCanvas.addEventListener("mousedown", e=>{
+    if(tool!==Tool.PEN && tool!==Tool.SIGN) return;
+    const r = drawCanvas.getBoundingClientRect();
+    penState = {
+      ctx: drawCanvas.getContext("2d"),
+      x: e.clientX - r.left,
+      y: e.clientY - r.top,
+      drawing: true
+    };
+    penState.ctx.lineWidth = tool===Tool.SIGN ? 2.2 : 1.8;
+    penState.ctx.lineCap = "round";
+    penState.ctx.strokeStyle = "#111";
+    penState.ctx.beginPath();
+    penState.ctx.moveTo(penState.x, penState.y);
+  });
+  window.addEventListener("mousemove", e=>{
+    if(!penState || !penState.drawing) return;
+    const r = drawCanvas.getBoundingClientRect();
+    const x = e.clientX - r.left, y = e.clientY - r.top;
+    penState.ctx.lineTo(x, y); penState.ctx.stroke();
+  });
+  window.addEventListener("mouseup", ()=>{ if(penState) penState.drawing=false; });
+}
+
+function makeTextBox(x,y){
+  const el = document.createElement("div");
+  el.className="textBox";
+  el.contentEditable = "true";
+  el.dataset.kind = "text";
+  el.style.left = x + "px";
+  el.style.top  = y + "px";
+  el.style.fontSize = fontSize + "px";
+  el.style.fontWeight = isBold ? "700" : "400";
+  const handle = document.createElement("div");
+  handle.className = "handle";
+  el.appendChild(handle);
+  el.addEventListener("dblclick", ()=> focusText(el));
+  return el;
+}
+function focusText(el){
+  el.focus();
+  document.execCommand("selectAll", false, null);
+}
+
+function deleteSelection(layer){
+  const sel = layer.querySelector(".textBox.active, .textBox:focus");
+  if(sel) sel.remove(); else notify("Nothing selected");
+}
+
+/* -------------------- zoom & rotate -------------------- */
+$("#zoomIn").onclick  = ()=> { scale = Math.min(3, scale+0.1); rerender(); };
+$("#zoomOut").onclick = ()=> { scale = Math.max(0.5, scale-0.1); rerender(); };
+
+async function rerender(){
+  if(!pdfDoc) return;
+  const curr = activePageIdx;
+  await renderAllPages();
+  // jump back to the page we were on
+  const t = thumbs.children[curr];
+  if(t){ t.click(); }
+}
+
+$("#rotatePage").onclick = async()=>{
+  if(!pages.length) return;
+  pages[activePageIdx].rotation = (pages[activePageIdx].rotation + 90) % 360;
+  // visually rotate canvas/layers
+  const p = pages[activePageIdx];
+  p.wrap.style.transform = `rotate(${p.rotation}deg)`;
+};
+
+/* -------------------- download: burn overlays into PDF -------------------- */
+$("#downloadBtn").onclick = async()=>{
+  if(!pdfDoc || !pdfBytes) return notify("Open a PDF first.");
+  const pdf = await PDFLib.PDFDocument.load(pdfBytes);
+  const pagesCount = pdf.getPageCount();
+
+  for(let i=0;i<pages.length;i++){
+    const p = pages[i];
+    const page = pdf.getPage(i);
+    const { width, height } = page.getSize();
+
+    // apply rotation
+    if(p.rotation){
+      const rot = PDFLib.degrees(p.rotation);
+      page.setRotation(rot);
+    }
+
+    // draw text + rectangles (from .textBox elements)
+    p.layer.querySelectorAll(".textBox").forEach(el=>{
+      const kind = el.dataset.kind;
+      const x = parseFloat(el.style.left);
+      const y = parseFloat(el.style.top);
+      const w = parseFloat(el.style.width||"120");
+      const h = parseFloat(el.style.height||"20");
+
+      // convert from DOM y-down to PDF y-up
+      const pdfX = x; 
+      const pdfY = height - (y + h);
+
+      if(kind==="text"){
+        const txt = el.innerText.replace(/\n/g, "\n");
+        const size = parseFloat(el.style.fontSize)||14;
+        const bold = el.style.fontWeight==="700";
+        // use standard fonts
+        const font = bold ? PDFLib.StandardFonts.HelveticaBold : PDFLib.StandardFonts.Helvetica;
+        // pdf-lib requires embedFont first
+        // we can use a cached map if many text boxes
+        // here, embed on demand:
+        (async()=>{
+          const f = await pdf.embedFont(font);
+          page.drawText(txt, {
+            x: pdfX + 2,
+            y: pdfY + 2,
+            size,
+            font: f,
+            color: PDFLib.rgb(0,0,0),
+            maxWidth: w - 4,
+            lineHeight: size*1.2
+          });
+        })();
+      } else if(kind==="rect"){
+        page.drawRectangle({
+          x: pdfX, y: pdfY, width: w, height: h,
+          borderColor: PDFLib.rgb(0,0,0),
+          borderWidth: 1,
+          color: PDFLib.rgb(0,0,0, 0.07)
+        });
+      }
+    });
+
+    // draw the pen/sign canvas as a PNG overlay (if any)
+    if(p.drawCanvas){
+      const pngBytes = p.drawCanvas.toDataURL("image/png");
+      if(pngBytes.length > 22){ // not empty
+        (async()=>{
+          const png = await pdf.embedPng(pngBytes);
+          page.drawImage(png, { x:0, y:0, width, height });
+        })();
+      }
+    }
+  }
+
+  // wait a tick for any async font/image embeds started inline
+  await new Promise(r=>setTimeout(r,150));
+
+  const out = await pdf.save({updateFieldAppearances:true});
+  const blob = new Blob([out], {type:"application/pdf"});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "edited.pdf";
+  a.click();
+  URL.revokeObjectURL(a.href);
+};
+
+/* -------------------- keyboard helpers -------------------- */
+window.addEventListener("keydown", e=>{
+  if(e.key==="Delete" && pages.length){
+    const layer = pages[activePageIdx].layer;
+    deleteSelection(layer);
+  }
+});
+</script>
 </body>
 </html>
