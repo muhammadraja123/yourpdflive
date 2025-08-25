@@ -5,26 +5,24 @@ const path = require("path");
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// Resolve absolute path to this project on Render (e.g. /opt/render/project/src)
-const ROOT = path.resolve();
+const PUBLIC_DIR = path.join(__dirname, "public");
+console.log("Serving from:", PUBLIC_DIR);
 
-// Serve everything in /public (JS, CSS, images, editor assets)
-app.use(express.static(path.join(ROOT, "public")));
+// Serve static assets in /public
+app.use(express.static(PUBLIC_DIR));
 
-// Health check
+// Health
 app.get("/healthz", (_req, res) => res.send("ok"));
 
-// Landing route (optional) – redirect to /editor
-app.get("/", (_req, res) => {
-  res.redirect("/editor");
-});
+// Redirect root -> /editor
+app.get("/", (_req, res) => res.redirect("/editor"));
 
-// IMPORTANT: Send the actual editor file from /public/editor.html
+// Send the editor HTML (NOTE: from /public/editor.html)
 app.get("/editor", (_req, res) => {
-  res.sendFile(path.join(ROOT, "public", "editor.html"));
+  res.sendFile(path.join(PUBLIC_DIR, "editor.html"));
 });
 
-// 404 fallback for other routes
+// 404 fallback
 app.use((_req, res) => res.status(404).send("Not Found"));
 
 app.listen(PORT, () => {
