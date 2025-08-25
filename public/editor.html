@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PDF Editor</title>
+<style>
+  :root { --red:#e53935; --red-600:#c62828; --bg:#fafafa; --ink:#111; }
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial}
+  .topbar{display:flex;gap:10px;align-items:center;padding:12px 16px;background:#fff;border-bottom:1px solid #eee;position:sticky;top:0;z-index:5}
+  .brand{font-weight:700;color:var(--red)}
+  .btn{background:var(--red);color:#fff;border:0;border-radius:10px;padding:9px 14px;cursor:pointer}
+  .btn:disabled{opacity:.5;cursor:not-allowed}
+  .btn.secondary{background:#fff;color:#333;border:1px solid #ddd}
+  .canvas-wrap{display:grid;grid-template-columns:220px 1fr;height:calc(100vh - 56px)}
+  .thumbs{overflow:auto;background:#fff;border-right:1px solid #eee}
+  .thumbs h4{margin:12px;color:#666}
+  .viewer{overflow:auto;padding:24px}
+  canvas{background:#fff;box-shadow:0 8px 24px rgba(0,0,0,.08);border-radius:12px;display:block;margin:0 auto 24px}
+  .tools{display:flex;gap:8px;margin-left:auto}
+  .tools .btn{background:var(--red-600)}
+  .pill{padding:6px 10px;border:1px solid #ddd;border-radius:999px;font-size:12px;color:#666}
+  input[type="file"]{display:none}
+</style>
+
+<!-- Libraries loaded from your Render service -->
+<script src="/lib/pdf.min.js"></script>
+<script>
+  (function setWorker() {
+    if (window.pdfjsLib?.GlobalWorkerOptions) {
+      pdfjsLib.GlobalWorkerOptions.workerSrc = "/lib/pdf.worker.min.js";
+    } else { setTimeout(setWorker, 50); }
+  })();
+</script>
+<script src="/lib/pdf-lib.min.js"></script>
+<script src="/lib/tesseract.min.js"></script>
+</head>
+<body>
+  <div class="topbar">
+    <div class="brand">yourPDFlive — Editor</div>
+    <label class="btn secondary">
+      <input id="fileInput" type="file" accept="application/pdf,image/*">
+      Upload PDF / Image
+    </label>
+    <span id="status" class="pill">No file loaded</span>
+    <div class="tools">
+      <button id="btnAddText" class="btn" disabled>Add Text</button>
+      <button id="btnDraw" class="btn" disabled>Draw</button>
+      <button id="btnOCR" class="btn" disabled>Scan & Edit</button>
+      <button id="btnRotate" class="btn" disabled>Rotate</button>
+      <button id="btnDownload" class="btn" disabled>Download</button>
+    </div>
+  </div>
+
+  <div class="canvas-wrap">
+    <div class="thumbs"><h4>Pages</h4><div id="thumbList"></div></div>
+    <div class="viewer" id="viewer"></div>
+  </div>
+
+<script>
+let pdfDoc, scale = 1.2, canvas, ctx;
+let addingText = false, drawing = false;
+const viewer = document.getElementById('viewer');
+const fileInput = document.getElementById('fileInput');
+const statusEl = document.getElementById('status');
+const btns = {
+  addText: document.getElementById('btnAddText'),
+  draw: document.getElementById('btnDraw'),
+  ocr: document.getElementById('btnOCR'),
+  rotate: document.getElementById('btnRotate'),
+  download: document.getElementById('btnDownload')
+};
+
+const enableTools = on => Object.values(btns).forEach(b => b.disabled = !on);
+
+fileInput.addEventListener('change', async (e) => {
+  const f = e.target.files?.[0];
+  if (!f) return;
+  statusEl.textContent = 'Loading…';
+  const isImage = f.type.startsWith('image/');
+  if (isImage) {
+    const imgUrl = URL.createObjectURL(f);
+    const pdfDocLib = await PDFLib.PDFDocument.create();
+    const jpg = await pdfDocLib.embedJpg(await (await fetch(imgUrl)).arrayBuffer());
+    const page = pdfDocLib.addPage([jpg.width, jpg.height]);
+    page.drawImage(jpg, { x:0, y:0, width: jpg.width, height: jpg.height });
+    const bytes = await pdfDocLib.save();
+    URL.revokeObjectURL(imgUrl);
+    await renderPdf(bytes);
+  } else {
+    await renderPdf(await f.arrayBuffer());
+  }
+});
+
+async function renderPdf(arrayBuf){
+  viewer.innerHTML = '';
+  const loadingTask = pdfjsLib.getDocument({ data: arrayBuf });
+  pdfDoc = await loadingTask.promise;
+
+  const page = await pdfDoc.getPage(1); // simple: render first page
+  const vp = page.getViewport({ scale });
+  canvas = document.createElement('canvas');
+  canvas.width = vp.width; canvas.height = vp.height;
+  canvas.style.maxWidth = '100%';
+  ctx = canvas.getContext('2d');
+  await page.render({ canvasContext: ctx, viewport: vp }).promise;
+  viewer.appendChild(canvas);
+
+  addCanvasListeners();
+  statusEl.textContent = `Loaded 1 / ${pdfDoc.numPages} page(s)`;
+  enableTools(true);
+}
+
+function addCanvasListeners(){
+  canvas.addEventListener('click', (e) => {
+    if (!addingText) return;
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left, y = e.clientY - rect.top;
+    const text = prompt("Enter text");
+    if (!text) return;
+    ctx.font = "18px Arial";
+    ctx.fillStyle = "#111";
+    ctx.fillText(text, x, y);
+  });
+  let down=false,last={x:0,y:0};
+  canvas.addEventListener('mousedown', e=>{ if(!drawing) return; down=true; const r=canvas.getBoundingClientRect(); last={x:e.clientX-r.left,y:e.clientY-r.top};});
+  canvas.addEventListener('mousemove', e=>{ if(!drawing||!down) return; const r=canvas.getBoundingClientRect(); const x=e.clientX-r.left,y=e.clientY-r.top; ctx.strokeStyle="#e53935"; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(last.x,last.y); ctx.lineTo(x,y); ctx.stroke(); last={x,y};});
+  window.addEventListener('mouseup', ()=> down=false);
+}
+
+btns.addText.addEventListener('click', ()=>{ addingText=true; drawing=false; canvas.style.cursor='text'; });
+btns.draw.addEventListener('click', ()=>{ drawing=true; addingText=false; canvas.style.cursor='crosshair'; });
+btns.rotate.addEventListener('click', ()=>{
+  const tmp = document.createElement('canvas');
+  tmp.width = canvas.height; tmp.height = canvas.width;
+  const tctx = tmp.getContext('2d');
+  tctx.translate(tmp.width/2, tmp.height/2);
+  tctx.rotate(90 * Math.PI/180);
+  tctx.drawImage(canvas, -canvas.width/2, -canvas.height/2);
+  canvas.width = tmp.width; canvas.height = tmp.height;
+  ctx.drawImage(tmp, 0, 0);
+});
+btns.ocr.addEventListener('click', async ()=>{
+  statusEl.textContent = 'Scanning…';
+  const dataURL = canvas.toDataURL('image/png');
+  const { data } = await Tesseract.recognize(dataURL, 'eng', { logger: ()=>{} });
+  alert("OCR text:\n\n" + (data.text || '(none)'));
+  statusEl.textContent = 'Scan complete';
+});
+btns.download.addEventListener('click', async ()=>{
+  const pdfDocLib = await PDFLib.PDFDocument.create();
+  const pngBytes = await (await fetch(canvas.toDataURL('image/png'))).arrayBuffer();
+  const png = await pdfDocLib.embedPng(pngBytes);
+  const page = pdfDocLib.addPage([canvas.width, canvas.height]);
+  page.drawImage(png, { x:0, y:0, width: canvas.width, height: canvas.height });
+  const bytes = await pdfDocLib.save();
+  const blob = new Blob([bytes], { type: "application/pdf" });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'edited.pdf';
+  a.click();
+});
+</script>
+</body>
+</html>
